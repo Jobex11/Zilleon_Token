@@ -1,0 +1,208 @@
+To add a name and symbol to your token on the Solana blockchain using Anchor, you'll need to include these attributes in your token minting process. While the Solana Token Program itself doesn’t directly support metadata (like name and symbol) during mint initialization, you can store this metadata using the Metaplex standard.
+
+Here's how to modify your smart contract and frontend to include a name and symbol for your token:
+
+### Step 1: Modify the Smart Contract to Store Metadata
+
+1. **Install Metaplex Libraries**: In your Anchor program, add the Metaplex libraries for handling metadata.
+
+   Add the following dependencies in your `Cargo.toml`:
+
+   ```toml
+   [dependencies]
+   metaplex-token-metadata = { version = "1.7.0", features = ["program"] }
+   ```
+
+2. **Update the Token Program**:
+
+   Update your `lib.rs` file to include the metadata creation logic. Here’s how you can do it:
+
+   ```rust
+   use anchor_lang::prelude::*;
+   use anchor_spl::token::{self, Mint, TokenAccount, Token};
+   use metaplex_token_metadata::state::{Metadata, CreateMetadataArgs};
+   use metaplex_token_metadata::instruction::create_metadata_accounts_v2;
+
+   declare_id!("YourProgramIDHere");
+
+   #[program]
+   pub mod zilleon_token {
+       use super::*;
+
+       pub fn initialize(ctx: Context<Initialize>, total_supply: u64, name: String, symbol: String) -> Result<()> {
+           let mint = &mut ctx.accounts.mint;
+           let owner = &ctx.accounts.owner;
+
+           mint.init_mint(0, &owner.key(), Some(&owner.key()))?;
+           let token_account = &mut ctx.accounts.token_account;
+
+           // Mint the total supply of tokens
+           token::mint_to(ctx.accounts.into_mint_to_context(), total_supply)?;
+
+           // Create metadata for the token
+           let metadata_seeds = &[
+               b"metadata",
+               metaplex_token_metadata::id().as_ref(),
+               mint.key().as_ref(),
+           ];
+           let (metadata_address, _bump) = Pubkey::find_program_address(metadata_seeds, &metaplex_token_metadata::id());
+
+           let metadata_args = CreateMetadataArgs {
+               name,
+               symbol,
+               uri: "https://your-token-uri.com".to_string(), // Replace with your actual token URI
+               seller_fee_basis_points: 500, // Example: 5% fee
+               creators: None,
+           };
+
+           invoke(
+               &create_metadata_accounts_v2(
+                   metaplex_token_metadata::id(),
+                   metadata_address,
+                   mint.key(),
+                   owner.key(),
+                   owner.key(),
+                   None,
+                   metadata_args,
+                   false,
+                   true,
+               ),
+               &[
+                   ctx.accounts.mint.to_account_info(),
+                   ctx.accounts.owner.to_account_info(),
+                   ctx.accounts.system_program.to_account_info(),
+               ],
+           )?;
+
+           Ok(())
+       }
+   }
+
+   #[derive(Accounts)]
+   pub struct Initialize<'info> {
+       #[account(init, payer = owner, space = Mint::LEN)]
+       pub mint: Account<'info, Mint>,
+       #[account(init, payer = owner, space = TokenAccount::LEN)]
+       pub token_account: Account<'info, TokenAccount>,
+       #[account(mut)]
+       pub owner: Signer<'info>,
+       pub system_program: Program<'info, System>,
+       pub token_program: Program<'info, Token>,
+   }
+   ```
+
+### Step 2: Modify the Frontend
+
+1. **Update the Frontend to Accept Name and Symbol**:
+
+   In your `src/App.jsx`, modify the form to accept the token name and symbol.
+
+   ```jsx
+   import React, { useEffect, useState } from 'react';
+   import { Connection, PublicKey, clusterApiUrl } from '@solana/web3.js';
+   import { Program, AnchorProvider, Wallet } from '@project-serum/anchor';
+   import { SystemProgram } from '@solana/web3.js';
+
+   const App = () => {
+       const [provider, setProvider] = useState(null);
+       const [tokenAmount, setTokenAmount] = useState(0);
+       const [tokenName, setTokenName] = useState("Zilleon");
+       const [tokenSymbol, setTokenSymbol] = useState("$ZLEON");
+
+       const programId = new PublicKey(import.meta.env.VITE_PROGRAM_ID);
+       const connection = new Connection(import.meta.env.VITE_SOLANA_RPC_URL, 'confirmed');
+
+       useEffect(() => {
+           const provider = AnchorProvider.local();
+           setProvider(provider);
+       }, []);
+
+       const initializeToken = async () => {
+           const program = new Program(idl, programId, provider);
+           const tx = await program.rpc.initialize(
+               new anchor.BN(20000000000), // total supply
+               tokenName,
+               tokenSymbol,
+               {
+                   accounts: {
+                       mint: mintPublicKey, // Replace with the actual public key
+                       tokenAccount: tokenAccountPublicKey, // Replace with the actual public key
+                       owner: provider.wallet.publicKey,
+                       systemProgram: SystemProgram.programId,
+                       tokenProgram: TOKEN_PROGRAM_ID,
+                   },
+               }
+           );
+           console.log("Transaction successful", tx);
+       };
+
+       const airdropTokens = async () => {
+           const program = new Program(idl, programId, provider);
+           const tx = await program.rpc.airdrop(new anchor.BN(tokenAmount), {
+               accounts: {
+                   tokenAccount: tokenAccountPublicKey, // Replace with the actual public key
+                   owner: provider.wallet.publicKey,
+                   tokenProgram: TOKEN_PROGRAM_ID,
+               },
+           });
+           console.log("Airdrop successful", tx);
+       };
+
+       return (
+           <div>
+               <h1>Zilleon Token</h1>
+               <button onClick={initializeToken}>Initialize Token</button>
+               <input
+                   type="text"
+                   value={tokenName}
+                   onChange={(e) => setTokenName(e.target.value)}
+                   placeholder="Token Name"
+               />
+               <input
+                   type="text"
+                   value={tokenSymbol}
+                   onChange={(e) => setTokenSymbol(e.target.value)}
+                   placeholder="Token Symbol"
+               />
+               <input
+                   type="number"
+                   value={tokenAmount}
+                   onChange={(e) => setTokenAmount(e.target.value)}
+                   placeholder="Amount to Airdrop"
+               />
+               <button onClick={airdropTokens}>Airdrop Tokens</button>
+           </div>
+       );
+   };
+
+   export default App;
+   ```
+
+### Step 3: Testing
+
+1. **Build and Deploy the Program**:
+
+   After making the above changes, rebuild your Anchor program and redeploy it:
+
+   ```bash
+   anchor build
+   anchor deploy
+   ```
+
+2. **Run the Frontend**:
+
+   Start the Vite server again and test the token creation and airdrop functionality:
+
+   ```bash
+   npm run dev
+   ```
+
+3. **Interact with Your Token**:
+
+   Use the updated UI to initialize your token with the name "Zilleon" and symbol "$ZLEON". Test the airdrop functionality to ensure it works correctly.
+
+### Final Note
+
+Make sure to replace `"https://your-token-uri.com"` with a valid URI that points to the token's metadata (like a JSON file that contains the metadata).
+
+If you have any further questions or need additional features, feel free to ask!
